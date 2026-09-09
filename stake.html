@@ -18,15 +18,27 @@
       <p class="text-secondary">You lock this BDAG. Unstake is not same-day.</p>
       <p id="detail" class="small text-secondary"></p>
       <p>In wallet: <strong id="bal">—</strong> BDAG</p>
-      <label class="form-label" for="pool">Mining pool address</label>
-      <input class="form-control mb-3" id="pool" placeholder="0x…" autocomplete="off" spellcheck="false">
+      <p class="small" id="lockedLine"></p>
+      <div class="input-group mb-3">
+        <input class="form-control" id="contractQuery" placeholder="Search staking contract 0x…" autocomplete="off" spellcheck="false">
+        <button class="btn btn-accent" type="button" id="btnSearchContracts">Search</button>
+      </div>
+      <div id="contractHits"></div>
       <label class="form-label" for="amount">How much BDAG?</label>
       <input class="form-control" id="amount" inputmode="decimal" placeholder="0.0">
       <div class="d-flex flex-wrap gap-2 mt-3">
         <button type="button" class="btn btn-ghost" id="btnMax">Max</button>
-        <button type="button" class="btn btn-accent" id="btnStake" data-need-ready>Stake</button>
+        <button type="button" class="btn btn-accent" id="btnStake">Stake</button>
       </div>
       <p class="small text-secondary mt-3" id="firstStake">Minimum 0.001 BDAG. Adding more while unstaking can restart the wait.</p>
+      <div class="wait-card mt-3" id="waitCard">
+        <div class="d-flex justify-content-between small mb-1">
+          <span id="waitLabel">Wait</span>
+          <span id="waitClock">—</span>
+        </div>
+        <div class="wait-track"><div class="wait-fill" id="waitFill"></div></div>
+        <p class="small text-secondary mb-0 mt-2" id="waitHint"></p>
+      </div>
     </div>
   </main>
   <footer class="site container-xl pb-3" id="foot"></footer>
