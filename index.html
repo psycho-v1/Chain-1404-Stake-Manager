@@ -15,20 +15,39 @@
   <main class="container-xl py-4">
     <div class="glass p-4 mb-3">
       <h1 class="h3 mb-2">Stake BDAG on the community network</h1>
-      <p class="text-secondary mb-2">Your wallet stays yours. This site never holds coins. Connect once from the header.</p>
+      <p class="text-secondary mb-2">Your wallet stays yours. This site never holds coins. Connect once in the header. It stays connected until you press Disconnect.</p>
       <p class="small mb-0" id="epochLine"></p>
       <p class="small text-secondary mb-0" id="detail">Checking community connections…</p>
     </div>
+
+    <div class="glass p-4 mb-3" id="pulseCard">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="h6 mb-0">Staking contract activity</h2>
+        <span class="badge text-bg-secondary" id="pulseStatus">Checking…</span>
+      </div>
+      <div class="num" id="pulseBal">—</div>
+      <p class="small mb-1" id="pulseDelta">Watching BDAG moving in and out</p>
+      <p class="small text-secondary mb-0" id="pulseWhen"></p>
+    </div>
+
     <div class="row g-3 mb-3">
       <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">In wallet</div><div class="num" id="bal">—</div></div></div>
       <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">Staked</div><div class="num" id="staked">—</div></div></div>
       <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">Rewards</div><div class="num" id="rew">—</div></div></div>
       <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">Unbonding</div><div class="num" id="unbond">—</div></div></div>
     </div>
-    <div class="glass p-4 mb-3">
-      <label class="form-label" for="pool">Mining pool address</label>
-      <input class="form-control" id="pool" placeholder="0x… pool you already stake with" autocomplete="off" spellcheck="false">
-      <p class="small text-secondary mt-2" id="firstStake">Needed to read your staked amount.</p>
+
+    <div class="glass p-4 mb-3" id="engageBox">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="h6 mb-0">Staking contract</h2>
+        <span id="lockBadge" class="badge text-bg-secondary">Not locked</span>
+      </div>
+      <p class="small text-secondary" id="lockedLine">Search, then lock a contract before Stake, Unstake, or Claim will work.</p>
+      <div class="input-group mb-2">
+        <input class="form-control" id="contractQuery" placeholder="Search 0x address or label" autocomplete="off" spellcheck="false">
+        <button class="btn btn-accent" type="button" id="btnSearchContracts"><i class="fa-solid fa-magnifying-glass me-1"></i>Search</button>
+      </div>
+      <div id="contractHits"></div>
       <div class="d-flex flex-wrap gap-2 mt-3">
         <a class="btn btn-accent" href="stake.html"><i class="fa-solid fa-lock me-1"></i>Stake</a>
         <a class="btn btn-ghost" href="unstake.html">Unstake</a>
@@ -36,6 +55,16 @@
         <a class="btn btn-ghost" href="insights.html">Insights</a>
       </div>
     </div>
+
+    <div class="wait-card glass p-3 mb-3" id="waitCard">
+      <div class="d-flex justify-content-between small mb-1">
+        <span id="waitLabel">Wait</span>
+        <span id="waitClock">—</span>
+      </div>
+      <div class="wait-track"><div class="wait-fill" id="waitFill"></div></div>
+      <p class="small text-secondary mb-0 mt-2" id="waitHint"></p>
+    </div>
+
     <div class="row g-3">
       <div class="col-lg-6"><div class="glass p-3"><h2 class="h6">Your mix</h2><canvas id="chartMix" class="chart"></canvas></div></div>
       <div class="col-lg-6"><div class="glass p-3"><h2 class="h6">Week progress</h2><div class="progress mb-2" style="height:10px"><div id="epochFill" class="progress-bar" style="width:0%"></div></div><canvas id="chartEpoch" class="chart"></canvas></div></div>
