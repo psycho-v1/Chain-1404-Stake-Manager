@@ -1,0 +1,94 @@
+<!doctype html>
+<html lang="en" data-theme="dark">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark light">
+  <meta name="description" content="Chain-1404 Stake Manager — unofficial community BDAG staking UI.">
+  <title>Chain-1404 Stake Manager</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=JetBrains+Mono:wght@400;600;700&family=Outfit:wght@400;600;700&display=swap" rel="stylesheet">
+  <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/css/bootstrap.min.css" rel="stylesheet">
+  <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css" rel="stylesheet">
+  <link rel="stylesheet" href="css/app.css">
+</head>
+<body data-page="home">
+  <div id="shell"></div>
+  <main class="container-xl py-4">
+    <div class="explorer-path mb-3">/c1404/home · live session · community rpc only</div>
+    <div class="glass p-4 mb-3">
+      <h1 class="h3 mb-2">Stake BDAG on the community network</h1>
+      <p class="text-secondary mb-2">Your wallet stays yours. This site never holds coins. Connect once in the header. It stays connected until you press Disconnect. Use is governed by the <a href="policy.html">Policy and User Agreement</a>.</p>
+      <p class="small mb-0" id="epochLine"></p>
+      <p class="small text-secondary mb-2" id="detail">Checking community connections…</p>
+      <a class="btn btn-accent btn-sm" href="donate.html"><i class="fa-solid fa-heart me-1"></i>Donate / support the UI</a>
+    </div>
+
+    <div class="glass p-4 mb-3" id="pulseCard">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="h6 mb-0">Staking contract activity</h2>
+        <span class="badge text-bg-secondary" id="pulseStatus">Checking…</span>
+      </div>
+      <div class="num" id="pulseBal">—</div>
+      <p class="small mb-1" id="pulseDelta">Watching BDAG moving in and out</p>
+      <p class="small text-secondary mb-0" id="pulseWhen"></p>
+    </div>
+
+    <div class="row g-3 mb-3">
+      <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">In wallet</div><div class="num" id="bal">—</div></div></div>
+      <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">Staked</div><div class="num" id="staked">—</div></div></div>
+      <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">Rewards <span class="live-dot ms-1"></span></div><div class="num" id="rew">—</div><div class="sub">on-chain yield</div></div></div>
+      <div class="col-6 col-lg-3"><div class="glass stat p-3"><div class="lbl">Unbonding <span class="live-dot ms-1"></span></div><div class="num" id="unbond">—</div><div class="sub">exit queue</div></div></div>
+    </div>
+
+    <div class="glass p-4 mb-3" id="engageBox">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="h6 mb-0">Mining pool lock</h2>
+        <span id="lockBadge" class="badge text-bg-secondary">Not locked</span>
+      </div>
+      <p class="small text-secondary" id="lockedLine">Paste the mining pool 0x you already stake with, search, then lock. The community staking proxy alone will not show your rewards.</p>
+      <div class="input-group mb-2">
+        <input class="form-control" id="contractQuery" placeholder="Mining pool 0x or label" autocomplete="off" spellcheck="false">
+        <button class="btn btn-accent" type="button" id="btnSearchContracts"><i class="fa-solid fa-magnifying-glass me-1"></i>Search</button>
+      </div>
+      <div id="contractHits"></div>
+      <div class="d-flex flex-wrap gap-2 mt-3">
+        <a class="btn btn-accent" href="stake.html"><i class="fa-solid fa-lock me-1"></i>Stake</a>
+        <a class="btn btn-ghost" href="unstake.html">Unstake</a>
+        <a class="btn btn-ghost" href="claim.html">Claim</a>
+        <a class="btn btn-ghost" href="insights.html">Insights</a>
+      </div>
+    </div>
+
+
+    <div class="glass p-4 mb-3">
+      <div class="d-flex justify-content-between align-items-center mb-2">
+        <h2 class="h6 mb-0">Live reward / unbond track</h2>
+        <span class="small text-secondary"><span class="live-dot me-1"></span>poll 12s</span>
+      </div>
+      <div class="wait-track mb-2"><div class="wait-fill live" id="rewFill"></div></div>
+      <p class="small text-secondary mb-3" id="rewLiveHint">Waiting for wallet + locked pool.</p>
+      <h2 class="h6">Open unbonding</h2>
+      <ul id="unbondList"><li>Connect and lock a pool to load.</li></ul>
+    </div>
+    <div class="wait-card glass p-3 mb-3" id="waitCard">
+      <div class="d-flex justify-content-between small mb-1">
+        <span id="waitLabel">Wait</span>
+        <span id="waitClock">—</span>
+      </div>
+      <div class="wait-track"><div class="wait-fill" id="waitFill"></div></div>
+      <p class="small text-secondary mb-0 mt-2" id="waitHint"></p>
+    </div>
+
+    <div class="row g-3">
+      <div class="col-lg-6"><div class="glass p-3"><h2 class="h6">Your mix</h2><canvas id="chartMix" class="chart"></canvas></div></div>
+      <div class="col-lg-6"><div class="glass p-3"><h2 class="h6">Week progress</h2><div class="progress mb-2" style="height:10px"><div id="epochFill" class="progress-bar" style="width:0%"></div></div><canvas id="chartEpoch" class="chart"></canvas></div></div>
+    </div>
+  </main>
+  <footer class="site container-xl pb-3" id="foot"></footer>
+  <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.3/dist/js/bootstrap.bundle.min.js"></script>
+  <script src="js/pins.js"></script>
+  <script src="js/app.js"></script>
+</body>
+</html>
