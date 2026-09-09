@@ -19,9 +19,21 @@
       <p id="detail" class="small text-secondary"></p>
       <p>Rewards: <strong id="rew">—</strong> · Unbonding: <strong id="unbond">—</strong></p>
       <p class="small" id="firstStake"></p>
-      <label class="form-label" for="pool">Mining pool address</label>
-      <input class="form-control" id="pool" placeholder="0x…" autocomplete="off" spellcheck="false">
-      <button type="button" class="btn btn-accent mt-3" id="btnClaim" data-need-ready>Claim</button>
+      <p class="small" id="lockedLine"></p>
+      <div class="input-group mb-3">
+        <input class="form-control" id="contractQuery" placeholder="Search staking contract 0x…" autocomplete="off" spellcheck="false">
+        <button class="btn btn-accent" type="button" id="btnSearchContracts">Search</button>
+      </div>
+      <div id="contractHits"></div>
+      <button type="button" class="btn btn-accent mt-3" id="btnClaim">Claim</button>
+      <div class="wait-card mt-3" id="waitCard">
+        <div class="d-flex justify-content-between small mb-1">
+          <span id="waitLabel">Wait</span>
+          <span id="waitClock">—</span>
+        </div>
+        <div class="wait-track"><div class="wait-fill" id="waitFill"></div></div>
+        <p class="small text-secondary mb-0 mt-2" id="waitHint"></p>
+      </div>
     </div>
   </main>
   <footer class="site container-xl pb-3" id="foot"></footer>
