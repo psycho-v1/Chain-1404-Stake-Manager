@@ -20,11 +20,23 @@
       <p>Staked now: <strong id="staked">—</strong> BDAG</p>
       <p class="small" id="firstStake"></p>
       <p class="small" id="epochLine"></p>
-      <label class="form-label" for="pool">Mining pool address</label>
-      <input class="form-control mb-3" id="pool" placeholder="0x…" autocomplete="off" spellcheck="false">
+      <p class="small" id="lockedLine"></p>
+      <div class="input-group mb-3">
+        <input class="form-control" id="contractQuery" placeholder="Search staking contract 0x…" autocomplete="off" spellcheck="false">
+        <button class="btn btn-accent" type="button" id="btnSearchContracts">Search</button>
+      </div>
+      <div id="contractHits"></div>
       <label class="form-label" for="amount">How much to unstake?</label>
       <input class="form-control" id="amount" inputmode="decimal" placeholder="0.0">
-      <button type="button" class="btn btn-accent mt-3" id="btnUnstake" data-need-ready>Request unstake</button>
+      <button type="button" class="btn btn-accent mt-3" id="btnUnstake">Request unstake</button>
+      <div class="wait-card mt-3" id="waitCard">
+        <div class="d-flex justify-content-between small mb-1">
+          <span id="waitLabel">Wait</span>
+          <span id="waitClock">—</span>
+        </div>
+        <div class="wait-track"><div class="wait-fill" id="waitFill"></div></div>
+        <p class="small text-secondary mb-0 mt-2" id="waitHint"></p>
+      </div>
       <h2 class="h6 mt-4">Open requests</h2>
       <ul id="unbondList"><li>Connect from the header to load.</li></ul>
     </div>
