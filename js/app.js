@@ -8,7 +8,12 @@
     extra: "c1404.contracts.v1",
     accept: "c1404.accept.v1",
     err: "c1404.err.v1",
-    active: "c1404.active.v1"
+    active: "c1404.active.v1",
+    walletId: "c1404.wallet.v1",
+    wantSession: "c1404.session.v1",
+    account: "c1404.account.v1",
+    locked: "c1404.locked.v1",
+    pulse: "c1404.pulse.v1"
   };
   const state = {
     account: null,
@@ -30,7 +35,10 @@
     unbond: [],
     minerSplit: 70,
     stakerSplit: 30,
-    rpcMs: []
+    rpcMs: [],
+    rpcBad: false,
+    rpcWhy: "",
+    pulse: { balance: 0n, totalStake: 0n, delta: 0n }
   };
 
   const $ = (id) => document.getElementById(id);
@@ -60,7 +68,6 @@
     if (!s) return "—";
     return new Date(Number(s) * 1000).toLocaleString();
   }
-
   function sanitize(msg) {
     let t = String(msg || "");
     t = t.replace(/0x[a-fA-F0-9]{8,}/g, "[hex]");
@@ -141,9 +148,28 @@
     </tr>`).join("");
   }
 
+  function lockedContract() {
+    try { return JSON.parse(localStorage.getItem(K.locked) || "null"); } catch { return null; }
+  }
+  function lockContract(row) {
+    if (!row || !isAddr(row.address)) return;
+    localStorage.setItem(K.locked, JSON.stringify({
+      address: row.address.toLowerCase(),
+      label: row.label || short(row.address),
+      at: Date.now()
+    }));
+    setPool(row.address);
+    refresh();
+  }
+  function unlockContract() {
+    localStorage.removeItem(K.locked);
+    refresh();
+  }
   function savedPool() { return (localStorage.getItem(K.pool) || "").trim(); }
   function setPool(addr) { if (addr) localStorage.setItem(K.pool, addr); }
   function currentPool() {
+    const locked = lockedContract();
+    if (locked && isAddr(locked.address)) return locked.address;
     const el = $("pool");
     return ((el && el.value.trim()) || savedPool());
   }
@@ -197,9 +223,13 @@
     }));
     state.rpcMs = checks.map((c) => ({ name: c.n.name, ok: c.ok, ms: c.ms, why: c.why }));
     const good = checks.find((c) => c.ok);
+    const badBits = checks.filter((c) => !c.ok).map((c) => c.why).join(" ");
+    state.rpcBad = !good || /blocked|wrong chain/.test(badBits) || denied(state.rpc);
+    state.rpcWhy = good ? "" : (checks.find((c) => c.why)?.why || "No allowed community RPC");
     if (!good) throw new Error("No community connection answered.");
     state.rpc = good.n.url;
     state.rpcName = good.n.name;
+    state.rpcBad = denied(state.rpc);
     localStorage.setItem(K.rpc, good.n.url);
   }
 
@@ -316,7 +346,6 @@
     return data;
   }
 
-  /* -------- wallets: EIP-6963 + injected + dapp browsers -------- */
   const discovered = new Map();
   window.addEventListener("eip6963:announceProvider", (ev) => {
     const d = ev.detail;
@@ -356,16 +385,53 @@
     return out;
   }
 
+  function sessionOn() { return localStorage.getItem(K.wantSession) === "1"; }
+  function rememberWallet(entry, account) {
+    const id = (entry.info && (entry.info.rdns || entry.info.name)) || "injected";
+    localStorage.setItem(K.walletId, id);
+    localStorage.setItem(K.wantSession, "1");
+    if (account) localStorage.setItem(K.account, account);
+  }
+  function disconnectWallet() {
+    localStorage.removeItem(K.wantSession);
+    localStorage.removeItem(K.walletId);
+    localStorage.removeItem(K.account);
+    state.account = null;
+    state.provider = null;
+    state.walletName = "";
+    paintWalletBtn();
+    refresh();
+  }
+
   async function connectWith(entry) {
     const provider = entry.provider;
     const accs = await provider.request({ method: "eth_requestAccounts" });
     state.provider = provider;
     state.account = accs[0] || null;
     state.walletName = (entry.info && entry.info.name) || "Wallet";
+    rememberWallet(entry, state.account);
     bindProvider(provider);
     await ensureChain();
     await refresh();
     hideWalletModal();
+  }
+  async function silentReconnect() {
+    if (!sessionOn()) return;
+    const want = localStorage.getItem(K.walletId);
+    const list = walletList();
+    const entry =
+      list.find((d) => (d.info.rdns || d.info.name) === want) ||
+      list.find((d) => d.provider === window.ethereum) ||
+      list[0];
+    if (!entry) return;
+    let accs = [];
+    try { accs = await entry.provider.request({ method: "eth_accounts" }); } catch {}
+    if (!accs || !accs.length) return;
+    state.provider = entry.provider;
+    state.account = accs[0];
+    state.walletName = (entry.info && entry.info.name) || "Wallet";
+    bindProvider(entry.provider);
+    try { await ensureChain(); } catch {}
   }
   function bindProvider(provider) {
     if (!provider || !provider.on) return;
@@ -374,7 +440,11 @@
     provider.on("accountsChanged", onAcc);
     provider.on("chainChanged", onChain);
   }
-  function onAcc(a) { state.account = (a && a[0]) || null; refresh(); }
+  function onAcc(a) {
+    state.account = (a && a[0]) || null;
+    if (!state.account) disconnectWallet();
+    else refresh();
+  }
   function onChain() { refresh(); }
 
   async function ensureChain() {
@@ -401,7 +471,7 @@
     renderWalletChoices();
     const el = $("walletModal");
     if (window.bootstrap && el) window.bootstrap.Modal.getOrCreateInstance(el).show();
-    else if (el) el.classList.add("show"), el.style.display = "block";
+    else if (el) { el.classList.add("show"); el.style.display = "block"; }
   }
   function hideWalletModal() {
     const el = $("walletModal");
@@ -440,224 +510,344 @@
   }
   function paintWalletBtn() {
     const btn = $("btnWallet");
+    const off = $("btnDisconnect");
+    const dot = $("walletSignal");
+    const warn = $("rpcWarn");
     if (!btn) return;
-    if (state.account) {
+    const on = !!state.account;
+    if (dot) {
+      dot.className = "sig " + (on ? "sig-on" : "sig-off");
+      dot.title = on ? "Wallet connected" : "Wallet not connected";
+    }
+    if (warn) {
+      warn.classList.toggle("d-none", !state.rpcBad);
+      warn.title = state.rpcBad
+        ? ("RPC not allowed: " + (state.rpcWhy || "blocked or wrong chain"))
+        : "";
+    }
+    if (on) {
       btn.innerHTML = '<i class="fa-solid fa-wallet me-1"></i>' + short(state.account);
+      off?.classList.remove("d-none");
     } else {
       btn.innerHTML = '<i class="fa-solid fa-wallet me-1"></i>Connect';
+      off?.classList.add("d-none");
     }
   }
 
-  async function refresh() {
-    try {
-      setStatus("wait", "Checking…");
-      await pickRpc();
-      await safetyChecks();
-      await Promise.all([readEpoch(), readFlags()]);
-      if (state.migrate) setStatus("wait", "Review contract change");
-      else if (!state.ready) setStatus("stop", state.reason || "Stopped");
-      else setStatus("ok", "Network OK · " + state.rpcName);
-      if ($("detail")) $("detail").textContent = state.reason || (
-        state.account ? ("Connected via " + (state.walletName || "wallet") + ". Using " + state.rpcName + ".") : "Connect a wallet from the header to see your position."
-      );
-      if ($("epochLine")) {
-        const ready = new Date((nowSec() + state.nextEpoch) * 1000);
-        $("epochLine").textContent = "Week " + state.epoch + " · next week around " + ready.toLocaleString();
-      }
-      const pool = currentPool();
-      state.pos = await position(pool);
-      if ($("bal")) $("bal").textContent = fmt(state.pos.wallet);
-      if ($("staked")) $("staked").textContent = fmt(state.pos.principal);
-      if ($("rew")) $("rew").textContent = fmt(state.pos.yieldAmt);
-      if ($("unbond")) $("unbond").textContent = fmt(state.pos.unbonding);
-      if ($("firstStake")) {
-        if (!state.account) $("firstStake").textContent = "";
-        else if (state.pos.first === 0n) $("firstStake").textContent = "No first deposit recorded for this wallet.";
-        else {
-          const unlock = Number(state.pos.first) + P.constants.bondingSeconds;
-          $("firstStake").textContent = nowSec() >= unlock
-            ? "Past the first 4-week wait (the contract still decides each claim)."
-            : "First lock until about " + dateFromSec(unlock) + ".";
-        }
-      }
-      if (state.account) {
-        try { state.unbond = decodeUnbonding(await ethCall(P.sel.getUnbondingRequests + addrWord(state.account))); }
-        catch { state.unbond = []; }
-      }
-      if ($("unbondList")) {
-        const open = state.unbond.filter((r) => !r.isClaimed);
-        $("unbondList").innerHTML = open.length
-          ? open.map((r) => `<li>${fmt(r.amount)} BDAG · ready ${dateFromSec(Number(r.releaseTime))}</li>`).join("")
-          : "<li>No open unstake requests.</li>";
-      }
-      if ($("riskLive")) {
-        $("riskLive").textContent = state.restrictedPot
-          ? "Payout destinations look restricted on-chain."
-          : "Payout destinations are not locked. An upgraded implementation could send the pot elsewhere.";
-      }
-      renderContracts();
-    } catch (err) {
-      state.ready = false;
-      state.reason = err.message || String(err);
-      setStatus("stop", "Stop");
-      if ($("detail")) $("detail").textContent = state.reason;
-      pushErr(state.reason);
+  function gates() {
+    const locked = lockedContract();
+    const now = nowSec();
+    const firstUnlock = state.pos.first ? Number(state.pos.first) + P.constants.bondingSeconds : 0;
+    const readyUnbond = (state.unbond || []).filter((r) => !r.isClaimed && Number(r.releaseTime) <= now);
+    const waitingUnbond = (state.unbond || []).filter((r) => !r.isClaimed && Number(r.releaseTime) > now);
+    const base = !!(locked && state.ready && state.account && !state.blocked && !state.migrate && !state.rpcBad);
+    const canStake = base;
+    const canUnstake = base && state.pos.principal > 0n;
+    const canClaim = base && (
+      (state.pos.yieldAmt > 0n && (!firstUnlock || now >= firstUnlock)) ||
+      readyUnbond.length > 0
+    );
+    return { locked, firstUnlock, readyUnbond, waitingUnbond, canStake, canUnstake, canClaim };
+  }
+  function claimWhy(g) {
+    if (!g.locked) return "Lock a staking contract first";
+    if (!state.account) return "Connect a wallet";
+    if (state.rpcBad) return "RPC not allowed";
+    if (g.readyUnbond.length) return "";
+    if (state.pos.yieldAmt > 0n && g.firstUnlock && nowSec() < g.firstUnlock) return "First-claim wait still running";
+    if ((state.unbond || []).some((r) => !r.isClaimed)) return "Unstake still in the wait window";
+    return "Nothing ready to claim";
+  }
+  function paintActions() {
+    const g = gates();
+    const set = (id, on, why) => {
+      const btn = $(id);
+      if (!btn) return;
+      btn.disabled = !on;
+      btn.title = on ? "" : why;
+    };
+    set("btnStake", g.canStake, !g.locked ? "Lock a staking contract first" : "Wallet or network not ready");
+    set("btnUnstake", g.canUnstake, !g.locked ? "Lock a staking contract first" : "Nothing staked to unstake");
+    set("btnClaim", g.canClaim, claimWhy(g));
+    const badge = $("lockBadge");
+    const line = $("lockedLine");
+    if (badge) {
+      badge.textContent = g.locked ? "Locked" : "Not locked";
+      badge.className = "badge " + (g.locked ? "text-bg-success" : "text-bg-secondary");
     }
-    document.querySelectorAll("[data-need-ready]").forEach((btn) => {
-      btn.disabled = !state.ready || !state.account || state.blocked || state.migrate;
+    if (line) {
+      line.textContent = g.locked
+        ? ("Locked " + (g.locked.label || short(g.locked.address)) + " · " + g.locked.address)
+        : "Search, then lock a contract before Stake, Unstake, or Claim will work.";
+    }
+  }
+
+  function fmtRemain(sec) {
+    if (sec <= 0) return "Ready now";
+    const d = Math.floor(sec / 86400);
+    const h = Math.floor((sec % 86400) / 3600);
+    const m = Math.floor((sec % 3600) / 60);
+    const s = sec % 60;
+    if (d) return d + "d " + h + "h " + m + "m " + s + "s";
+    if (h) return h + "h " + m + "m " + s + "s";
+    return m + "m " + s + "s";
+  }
+  function nextWait() {
+    const g = gates();
+    const now = nowSec();
+    const claimWait = (state.pos.yieldAmt > 0n && g.firstUnlock > now)
+      ? { kind: "First claim", end: g.firstUnlock, start: Number(state.pos.first) || (g.firstUnlock - P.constants.bondingSeconds) }
+      : null;
+    const unbondWait = g.waitingUnbond
+      .map((r) => ({
+        kind: "Unstake release",
+        end: Number(r.releaseTime),
+        start: Number(r.releaseTime) - P.constants.unbondingSeconds,
+        amount: r.amount
+      }))
+      .sort((a, b) => a.end - b.end)[0];
+    return [claimWait, unbondWait].filter(Boolean).sort((a, b) => a.end - b.end)[0] || null;
+  }
+  function paintWait() {
+    const card = $("waitCard");
+    if (!card) return;
+    const fill = $("waitFill");
+    const w = nextWait();
+    const g = gates();
+    if (!w) {
+      $("waitLabel").textContent = "No wait";
+      $("waitClock").textContent = "Ready";
+      $("waitHint").textContent = g.canClaim
+        ? "Claim is available."
+        : g.canUnstake
+          ? "You can request an unstake."
+          : g.locked
+            ? "Lock is on. Connect and wait for a position if buttons stay off."
+            : "Lock a staking contract first.";
+      if (fill) {
+        fill.style.width = "100%";
+        fill.classList.add("ready");
+      }
+      return;
+    }
+    const now = nowSec();
+    const left = Math.max(0, w.end - now);
+    const span = Math.max(1, w.end - w.start);
+    const done = Math.min(100, ((span - left) / span) * 100);
+    $("waitLabel").textContent = w.kind;
+    $("waitClock").textContent = fmtRemain(left);
+    $("waitHint").textContent = w.amount
+      ? (fmt(w.amount) + " BDAG can be claimed when this hits zero.")
+      : "Claim stays off until this hits zero. The contract can still refuse.";
+    if (fill) {
+      fill.classList.toggle("ready", left <= 0);
+      fill.style.width = done + "%";
+    }
+  }
+  let waitTimer = null;
+  function startWaitClock() {
+    if (waitTimer) clearInterval(waitTimer);
+    paintWait();
+    waitTimer = setInterval(() => {
+      paintWait();
+      paintActions();
+    }, 1000);
+  }
+
+  async function inspectContract(addr) {
+    const empty = { address: addr, principal: 0n, yieldAmt: 0n, unbonding: 0n, total: 0n, engaged: false };
+    if (!isAddr(addr)) return empty;
+    const p = addrWord(addr);
+    const total = hexToBig(await ethCall(P.sel.poolTotalStake + p).catch(() => "0x0"));
+    if (!state.account) return { ...empty, total };
+    const a = addrWord(state.account);
+    const [pr, un, yi] = await Promise.all([
+      ethCall(P.sel.stakerPrincipal + a + p).catch(() => "0x0"),
+      ethCall(P.sel.stakerUnbonding + a + p).catch(() => "0x0"),
+      ethCall(P.sel.poolStakerYield + p + a).catch(() => "0x0")
+    ]);
+    const principal = hexToBig(pr);
+    const unbonding = hexToBig(un);
+    const yieldAmt = hexToBig(yi);
+    return {
+      address: addr.toLowerCase(),
+      principal, unbonding, yieldAmt, total,
+      engaged: principal + unbonding + yieldAmt > 0n
+    };
+  }
+  function knownAddresses() {
+    const out = [];
+    const add = (addr, label) => {
+      if (!isAddr(addr)) return;
+      const k = addr.toLowerCase();
+      if (out.some((x) => x.address === k)) return;
+      out.push({ address: k, label: label || short(addr) });
+    };
+    allContracts().forEach((c) => add(c.proxy, c.label));
+    if (savedPool()) add(savedPool(), "Previously used");
+    const locked = lockedContract();
+    if (locked) add(locked.address, locked.label || "Locked");
+    loadLog().forEach((r) => { if (r.pool) add(r.pool, "From your log"); });
+    const q = ($("contractQuery") && $("contractQuery").value.trim()) || "";
+    if (isAddr(q)) add(q, "Search");
+    return out;
+  }
+  async function searchContracts() {
+    const box = $("contractHits");
+    if (!box) return;
+    box.innerHTML = "<p class='small text-secondary'>Reading contracts…</p>";
+    const q = (($("contractQuery") && $("contractQuery").value) || "").trim().toLowerCase();
+    const found = [];
+    for (const row of knownAddresses()) {
+      if (q && !row.address.includes(q) && !(row.label || "").toLowerCase().includes(q)) continue;
+      found.push({ ...row, ...(await inspectContract(row.address)) });
+    }
+    const engaged = found.filter((r) => r.engaged);
+    const rest = found.filter((r) => !r.engaged);
+    const locked = lockedContract();
+    const card = (r) => {
+      const isLocked = locked && locked.address === r.address;
+      return `<div class="glass p-3 mb-2">
+        <div class="d-flex justify-content-between gap-2 flex-wrap">
+          <div>
+            <div class="fw-semibold">${r.label || short(r.address)}</div>
+            <div class="addr small">${r.address}</div>
+            <div class="small text-secondary">
+              ${r.engaged ? "You are in this contract" : "No position for this wallet"}
+              · stake ${fmt(r.principal)} · rewards ${fmt(r.yieldAmt)} · unbonding ${fmt(r.unbonding)}
+            </div>
+          </div>
+          <button type="button" class="btn btn-sm ${isLocked ? "btn-ghost" : "btn-accent"}" data-lock="${r.address}" ${isLocked ? "disabled" : ""}>
+            ${isLocked ? "Locked" : "Lock to engage"}
+          </button>
+        </div>
+      </div>`;
+    };
+    box.innerHTML =
+      (engaged.length ? "<p class='small mb-2'>Contracts this wallet is in</p>" + engaged.map(card).join("") : "") +
+      (rest.length ? "<p class='small mt-3 mb-2'>Other matches</p>" + rest.map(card).join("") : "") +
+      (!found.length ? "<p class='small text-secondary'>No contract found. Paste a 0x address and search again.</p>" : "");
+    box.querySelectorAll("[data-lock]").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const row = found.find((r) => r.address === btn.getAttribute("data-lock"));
+        if (row) lockContract(row);
+      });
     });
-    paintWalletBtn();
-    renderLog();
-    drawCharts();
   }
 
-  async function sendTx(action, data, valueWei, amountLabel) {
-    if (!state.account || !state.provider) return alert("Connect a wallet first.");
-    if (!state.ready || state.migrate) return alert(state.reason || "Network check failed.");
-    if (state.blocked) return alert("This wallet looks frozen on enforcing nodes.");
-    addLog({ action, amount: amountLabel, status: "pending", note: "Confirm in wallet" });
-    try {
-      const tx = { from: state.account, to: activeContract().proxy, data, value: "0x" + BigInt(valueWei || 0).toString(16) };
-      const hash = await state.provider.request({ method: "eth_sendTransaction", params: [tx] });
-      addLog({ action, amount: amountLabel, status: "pending", hash: hash ? hash.slice(0, 18) : "", note: "Waiting" });
-      let rec = null;
-      for (let i = 0; i < 30; i++) {
-        await new Promise((r) => setTimeout(r, 2000));
-        rec = await rpc("eth_getTransactionReceipt", [hash], 5000);
-        if (rec) break;
-      }
-      const ok = rec && hexToBig(rec.status) === 1n;
-      addLog({ action, amount: amountLabel, status: ok ? "done" : rec ? "failed" : "pending", hash: hash ? hash.slice(0, 18) : "", note: ok ? "Confirmed" : rec ? "Reverted" : "Still waiting" });
-      await refresh();
-    } catch (e) {
-      const raw = e.message || String(e);
-      const nice = /reject|denied|4001/i.test(raw) ? "You cancelled. Nothing moved." : sanitize(raw);
-      addLog({ action, amount: amountLabel, status: "failed", note: nice });
-      pushErr(nice);
-      alert(nice);
+  function loadPulse() {
+    try { return JSON.parse(localStorage.getItem(K.pulse) || "[]"); } catch { return []; }
+  }
+  function savePulse(rows) {
+    localStorage.setItem(K.pulse, JSON.stringify(rows.slice(-48)));
+  }
+  async function readPulse() {
+    const proxy = activeContract().proxy;
+    const pool = currentPool();
+    const balHex = await rpc("eth_getBalance", [proxy, "latest"]).catch(() => "0x0");
+    const stakeHex = (pool && isAddr(pool))
+      ? await ethCall(P.sel.poolTotalStake + addrWord(pool)).catch(() => "0x0")
+      : "0x0";
+    const now = { t: Date.now(), balance: hexToBig(balHex).toString(), totalStake: hexToBig(stakeHex).toString() };
+    const hist = loadPulse();
+    const last = hist[hist.length - 1];
+    if (!last || last.balance !== now.balance || last.totalStake !== now.totalStake || Date.now() - last.t > 15 * 60 * 1000) {
+      hist.push(now);
+      savePulse(hist);
+    }
+    const prev = hist.find((s) => now.t - s.t >= 60 * 60 * 1000) || hist[0];
+    const delta = hexToBig(now.balance) - hexToBig(prev ? prev.balance : now.balance);
+    state.pulse = { balance: hexToBig(now.balance), totalStake: hexToBig(now.totalStake), delta, t: now.t, prevT: prev && prev.t };
+    const changed = [...hist].reverse().find((s, i, arr) => {
+      const nxt = hist[hist.length - 1];
+      return s.balance !== nxt.balance || s.totalStake !== nxt.totalStake;
+    });
+    const age = changed ? now.t - changed.t : Infinity;
+    state.pulse.status = age < 2 * 3600 * 1000 ? "Active" : age < 24 * 3600 * 1000 ? "Quiet" : "Idle";
+  }
+  function paintPulse() {
+    if (!$("pulseCard")) return;
+    const p = state.pulse;
+    if ($("pulseBal")) $("pulseBal").textContent = fmt(p.balance) + " BDAG in manager";
+    const el = $("pulseDelta");
+    if (el) {
+      const sign = p.delta > 0n ? "+" : p.delta < 0n ? "−" : "";
+      const abs = p.delta < 0n ? -p.delta : p.delta;
+      el.className = "small mb-1 " + (p.delta > 0n ? "pulse-up" : p.delta < 0n ? "pulse-down" : "pulse-flat");
+      el.textContent = (p.delta === 0n ? "No BDAG moved in the watched window" : (sign + fmt(abs) + " BDAG vs earlier snapshot"));
+    }
+    if ($("pulseWhen")) $("pulseWhen").textContent = p.status === "Active"
+      ? "Money has moved recently. Contract looks active."
+      : p.status === "Quiet"
+        ? "Little movement in the last few hours."
+        : "No movement seen in the last day — or this device just started watching.";
+    const st = $("pulseStatus");
+    if (st) {
+      st.textContent = p.status || "Checking…";
+      st.className = "badge " + (p.status === "Active" ? "text-bg-success" : p.status === "Quiet" ? "text-bg-warning" : "text-bg-secondary");
     }
   }
 
-  async function doStake() {
-    const pool = currentPool();
-    if (!isAddr(pool)) return alert("Paste the mining pool address first.");
-    setPool(pool);
-    let amt;
-    try { amt = parseAmount($("amount").value); } catch (e) { return alert(e.message); }
-    if (amt < BigInt(P.constants.minStakeWei)) return alert("Minimum stake is 0.001 BDAG.");
-    const data = P.sel.stake + addrWord(state.account) + uintWord(amt) + addrWord(pool);
-    try {
-      await rpc("eth_call", [{ to: activeContract().proxy, from: state.account, data, value: "0x" + amt.toString(16) }, "latest"]);
-    } catch (e) { return alert("This stake would fail: " + sanitize(e.message)); }
-    await sendTx("Stake", data, amt, fmt(amt) + " BDAG");
-  }
-  async function doUnstake() {
-    const pool = currentPool();
-    if (!isAddr(pool)) return alert("Paste the mining pool address first.");
-    setPool(pool);
-    let amt;
-    try { amt = parseAmount($("amount").value); } catch (e) { return alert(e.message); }
-    const data = encodeUnstake(state.account, amt, [pool]);
-    try { await rpc("eth_call", [{ to: activeContract().proxy, from: state.account, data }, "latest"]); }
-    catch (e) { return alert("This unstake would fail: " + sanitize(e.message)); }
-    await sendTx("Unstake", data, 0n, fmt(amt) + " BDAG");
-  }
-  async function doClaim() {
-    const pool = currentPool();
-    if (!isAddr(pool)) return alert("Paste the mining pool address first.");
-    setPool(pool);
-    const data = P.sel.claimStake + addrWord(state.account) + addrWord(pool);
-    try { await rpc("eth_call", [{ to: activeContract().proxy, from: state.account, data }, "latest"]); }
-    catch (e) { return alert("Claim is not allowed yet: " + sanitize(e.message)); }
-    await sendTx("Claim", data, 0n, "claim");
-  }
-
-  /* -------- charts (canvas, no extra lib) -------- */
-  function cssVar(name, fb) {
-    return getComputedStyle(document.documentElement).getPropertyValue(name).trim() || fb;
-  }
-  function doughnut(canvas, parts) {
-    if (!canvas) return;
+  function bars(canvas, rows) {
+    if (!canvas || !canvas.getContext) return;
     const ctx = canvas.getContext("2d");
-    const w = canvas.width = canvas.clientWidth * 2 || 600;
-    const h = canvas.height = 280;
+    const w = canvas.width = canvas.clientWidth || 320;
+    const h = canvas.height = 180;
+    ctx.clearRect(0, 0, w, h);
+    if (!rows || !rows.length) return;
+    const max = Math.max(1, ...rows.map((r) => r.v));
+    const bw = Math.max(8, (w - 20) / rows.length - 8);
+    rows.forEach((r, i) => {
+      const x = 10 + i * (bw + 8);
+      const bh = (r.v / max) * (h - 28);
+      ctx.fillStyle = r.c || "#3ee0ff";
+      ctx.fillRect(x, h - 18 - bh, bw, bh);
+      ctx.fillStyle = "#8aa6c2";
+      ctx.font = "10px sans-serif";
+      ctx.fillText(String(r.l).slice(0, 8), x, h - 4);
+    });
+  }
+  function pie(canvas, parts) {
+    if (!canvas || !canvas.getContext) return;
+    const ctx = canvas.getContext("2d");
+    const w = canvas.width = canvas.clientWidth || 320;
+    const h = canvas.height = 180;
     ctx.clearRect(0, 0, w, h);
     const total = parts.reduce((s, p) => s + p.v, 0) || 1;
-    const cx = w * 0.32, cy = h / 2, r = Math.min(w, h) * 0.32;
     let a = -Math.PI / 2;
+    const cx = w / 2, cy = h / 2, r = Math.min(w, h) / 2 - 8;
     parts.forEach((p) => {
-      const sl = (p.v / total) * Math.PI * 2;
+      const slice = (p.v / total) * Math.PI * 2;
       ctx.beginPath();
       ctx.moveTo(cx, cy);
-      ctx.arc(cx, cy, r, a, a + sl);
+      ctx.arc(cx, cy, r, a, a + slice);
       ctx.closePath();
       ctx.fillStyle = p.c;
       ctx.fill();
-      a += sl;
+      a += slice;
     });
-    ctx.fillStyle = cssVar("--bg1", "#0b1a2e");
-    ctx.beginPath(); ctx.arc(cx, cy, r * 0.55, 0, Math.PI * 2); ctx.fill();
-    ctx.font = "22px sans-serif";
-    ctx.fillStyle = cssVar("--text", "#fff");
-    let ly = 40;
-    parts.forEach((p) => {
-      ctx.fillStyle = p.c;
-      ctx.fillRect(w * 0.62, ly, 18, 18);
-      ctx.fillStyle = cssVar("--text", "#fff");
-      ctx.fillText(p.l + "  " + p.v.toFixed(2), w * 0.62 + 28, ly + 16);
-      ly += 36;
-    });
-  }
-  function bars(canvas, items) {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const w = canvas.width = canvas.clientWidth * 2 || 600;
-    const h = canvas.height = 280;
-    ctx.clearRect(0, 0, w, h);
-    const max = Math.max(1, ...items.map((i) => i.v));
-    const gap = 16, bw = (w - gap * (items.length + 1)) / items.length;
-    items.forEach((it, i) => {
-      const x = gap + i * (bw + gap);
-      const bh = (it.v / max) * (h - 70);
-      ctx.fillStyle = it.c || cssVar("--accent", "#3ee0ff");
-      ctx.fillRect(x, h - 40 - bh, bw, bh);
-      ctx.fillStyle = cssVar("--muted", "#888");
-      ctx.font = "20px sans-serif";
-      ctx.fillText(it.l, x, h - 12);
-    });
-  }
-  function line(canvas, pts) {
-    if (!canvas) return;
-    const ctx = canvas.getContext("2d");
-    const w = canvas.width = canvas.clientWidth * 2 || 600;
-    const h = canvas.height = 280;
-    ctx.clearRect(0, 0, w, h);
-    if (!pts.length) return;
-    const max = Math.max(1, ...pts);
-    ctx.strokeStyle = cssVar("--accent", "#3ee0ff");
-    ctx.lineWidth = 4;
-    ctx.beginPath();
-    pts.forEach((v, i) => {
-      const x = (i / Math.max(1, pts.length - 1)) * (w - 40) + 20;
-      const y = h - 30 - (v / max) * (h - 60);
-      if (i === 0) ctx.moveTo(x, y); else ctx.lineTo(x, y);
-    });
-    ctx.stroke();
   }
   function drawCharts() {
-    const w = Number(state.pos.wallet) / 1e18;
-    const s = Number(state.pos.principal) / 1e18;
-    const r = Number(state.pos.yieldAmt) / 1e18;
-    const u = Number(state.pos.unbonding) / 1e18;
-    doughnut($("chartMix"), [
-      { l: "Wallet", v: w, c: "#3ee0ff" },
-      { l: "Staked", v: s, c: "#7c5cff" },
-      { l: "Rewards", v: r, c: "#3ee0a0" },
-      { l: "Unbonding", v: u, c: "#ffc857" }
+    const mix = [
+      { v: Number(state.pos.wallet) / 1e18, c: "#3ee0ff" },
+      { v: Number(state.pos.principal) / 1e18, c: "#7c5cff" },
+      { v: Number(state.pos.yieldAmt) / 1e18, c: "#3ee0a0" },
+      { v: Number(state.pos.unbonding) / 1e18, c: "#ffc857" }
+    ];
+    pie($("chartMix"), mix);
+    const remain = state.nextEpoch || 0;
+    const used = Math.max(0, P.constants.epochSeconds - remain);
+    bars($("chartEpoch"), [
+      { l: "used", v: used, c: "#3ee0ff" },
+      { l: "left", v: remain, c: "#7c5cff" }
     ]);
-    doughnut($("chartSplit"), [
-      { l: "Miners", v: state.minerSplit, c: "#7c5cff" },
-      { l: "Stakers", v: state.stakerSplit, c: "#3ee0ff" }
+    if ($("epochFill")) {
+      const pct = Math.min(100, (used / P.constants.epochSeconds) * 100);
+      $("epochFill").style.width = pct + "%";
+    }
+    pie($("chartSplit"), [
+      { v: state.minerSplit, c: "#7c5cff" },
+      { v: state.stakerSplit, c: "#3ee0a0" }
     ]);
     const days = {};
     loadLog().forEach((row) => {
@@ -677,33 +867,151 @@
       v: n.ok ? Math.max(1, n.ms) : 0,
       c: n.ok ? "#3ee0a0" : "#ff6b81"
     })));
-    const remain = Math.max(0, state.nextEpoch);
-    line($("chartEpoch"), [P.constants.epochSeconds, Math.max(1, P.constants.epochSeconds - remain / 2), remain]);
-    if ($("epochFill")) {
-      const pct = Math.max(0, Math.min(100, 100 * (1 - remain / P.constants.epochSeconds)));
-      $("epochFill").style.width = pct + "%";
+  }
+
+  async function refresh() {
+    try {
+      setStatus("wait", "Checking…");
+      await pickRpc();
+      await safetyChecks();
+      await Promise.all([readEpoch(), readFlags()]);
+      if (state.migrate) setStatus("wait", "Review contract change");
+      else if (!state.ready) setStatus("stop", state.reason || "Stopped");
+      else if (state.rpcBad) setStatus("wait", "RPC warning");
+      else setStatus("ok", "Network OK · " + state.rpcName);
+      if ($("detail")) $("detail").textContent = state.reason || (
+        state.account
+          ? ("Connected via " + (state.walletName || "wallet") + ". Using " + state.rpcName + ".")
+          : "Connect a wallet from the header to see your position."
+      );
+      if ($("epochLine")) {
+        const ready = new Date((nowSec() + state.nextEpoch) * 1000);
+        $("epochLine").textContent = "Week " + state.epoch + " · next week around " + ready.toLocaleString();
+      }
+      const pool = currentPool();
+      state.pos = await position(pool);
+      if (state.account) {
+        try { state.unbond = decodeUnbonding(await ethCall(P.sel.getUnbondingRequests + addrWord(state.account))); }
+        catch { state.unbond = []; }
+      } else state.unbond = [];
+      if ($("bal")) $("bal").textContent = fmt(state.pos.wallet);
+      if ($("staked")) $("staked").textContent = fmt(state.pos.principal);
+      if ($("rew")) $("rew").textContent = fmt(state.pos.yieldAmt);
+      if ($("unbond")) $("unbond").textContent = fmt(state.pos.unbonding);
+      if ($("firstStake")) {
+        if (!state.account) $("firstStake").textContent = "";
+        else if (state.pos.first === 0n) $("firstStake").textContent = "No first deposit recorded for this wallet.";
+        else {
+          const unlock = Number(state.pos.first) + P.constants.bondingSeconds;
+          $("firstStake").textContent = nowSec() >= unlock
+            ? "Past the first 4-week wait (the contract still decides each claim)."
+            : "First lock until about " + dateFromSec(unlock) + ".";
+        }
+      }
+      if ($("unbondList")) {
+        const open = state.unbond.filter((r) => !r.isClaimed);
+        $("unbondList").innerHTML = open.length
+          ? open.map((r) => {
+            const left = Math.max(0, Number(r.releaseTime) - nowSec());
+            return `<li>${fmt(r.amount)} BDAG · ${left ? fmtRemain(left) : "ready to claim"} · ${short(r.pool)}</li>`;
+          }).join("")
+          : "<li>No open unstake requests.</li>";
+      }
+      try { await readPulse(); paintPulse(); } catch {}
+    } catch (e) {
+      state.ready = false;
+      state.rpcBad = true;
+      state.rpcWhy = e.message || "RPC failed";
+      setStatus("stop", sanitize(e.message || "Stopped"));
+      if ($("detail")) $("detail").textContent = sanitize(e.message || "Stopped");
+      pushErr(e.message || "Refresh failed");
     }
+    paintWalletBtn();
+    paintActions();
+    paintWait();
+    renderLog();
+    drawCharts();
+    renderContracts();
+  }
+
+  async function sendTx(action, data, value, amountLabel) {
+    if (!state.provider || !state.account) return alert("Connect a wallet first.");
+    const g = gates();
+    if (!g.locked) return alert("Lock a staking contract first.");
+    const hash = await state.provider.request({
+      method: "eth_sendTransaction",
+      params: [{
+        from: state.account,
+        to: activeContract().proxy,
+        data,
+        value: "0x" + BigInt(value || 0).toString(16)
+      }]
+    });
+    addLog({ action, amount: amountLabel, status: "pending", hash: hash ? hash.slice(0, 18) : "", note: "Waiting", pool: currentPool() });
+    let rec = null;
+    for (let i = 0; i < 30; i++) {
+      await new Promise((r) => setTimeout(r, 2000));
+      rec = await rpc("eth_getTransactionReceipt", [hash], 5000);
+      if (rec) break;
+    }
+    const ok = rec && hexToBig(rec.status) === 1n;
+    addLog({ action, amount: amountLabel, status: ok ? "done" : rec ? "failed" : "pending", hash: hash ? hash.slice(0, 18) : "", note: ok ? "Confirmed" : rec ? "Reverted" : "Still waiting", pool: currentPool() });
+    await refresh();
+  }
+
+  async function doStake() {
+    const g = gates();
+    if (!g.canStake) return alert("Stake is not available yet.");
+    const pool = currentPool();
+    if (!isAddr(pool)) return alert("Lock a staking contract first.");
+    setPool(pool);
+    let amt;
+    try { amt = parseAmount($("amount").value); } catch (e) { return alert(e.message); }
+    if (amt < BigInt(P.constants.minStakeWei)) return alert("Minimum stake is 0.001 BDAG.");
+    const data = P.sel.stake + addrWord(state.account) + uintWord(amt) + addrWord(pool);
+    try {
+      await rpc("eth_call", [{ to: activeContract().proxy, from: state.account, data, value: "0x" + amt.toString(16) }, "latest"]);
+    } catch (e) { return alert("This stake would fail: " + sanitize(e.message)); }
+    await sendTx("Stake", data, amt, fmt(amt) + " BDAG");
+  }
+  async function doUnstake() {
+    const g = gates();
+    if (!g.canUnstake) return alert("Unstake is not available yet.");
+    const pool = currentPool();
+    if (!isAddr(pool)) return alert("Lock a staking contract first.");
+    setPool(pool);
+    let amt;
+    try { amt = parseAmount($("amount").value); } catch (e) { return alert(e.message); }
+    const data = encodeUnstake(state.account, amt, [pool]);
+    try { await rpc("eth_call", [{ to: activeContract().proxy, from: state.account, data }, "latest"]); }
+    catch (e) { return alert("This unstake would fail: " + sanitize(e.message)); }
+    await sendTx("Unstake", data, 0n, fmt(amt) + " BDAG");
+  }
+  async function doClaim() {
+    const g = gates();
+    if (!g.canClaim) return alert(claimWhy(g));
+    const pool = currentPool();
+    if (!isAddr(pool)) return alert("Lock a staking contract first.");
+    setPool(pool);
+    const data = P.sel.claimStake + addrWord(state.account) + addrWord(pool);
+    try { await rpc("eth_call", [{ to: activeContract().proxy, from: state.account, data }, "latest"]); }
+    catch (e) { return alert("Claim is not allowed yet: " + sanitize(e.message)); }
+    await sendTx("Claim", data, 0n, "claim");
   }
 
   function renderContracts() {
     const box = $("contractList");
     if (!box) return;
-    const acc = acceptedPins();
+    const live = activeContract();
     box.innerHTML = allContracts().map((c) => {
-      const on = activeContract().id === c.id;
-      const live = on ? state.liveImpl : "";
-      const expected = (acc[c.id] && acc[c.id].implementation) || c.implementation;
-      const drift = live && expected && live.toLowerCase() !== expected.toLowerCase();
-      return `<div class="glass p-3 mb-3">
-        <div class="d-flex justify-content-between flex-wrap gap-2">
-          <strong>${c.label}</strong>
-          <span class="pill ${on ? "ok" : ""}">${on ? "Active" : "Saved"}</span>
-        </div>
-        <div class="addr mt-2">Proxy pin on file</div>
-        <div class="small text-secondary">${c.note || ""} ${drift ? "· live logic differs from the pin" : ""}</div>
-        <div class="mt-2 d-flex gap-2 flex-wrap">
-          <button class="btn btn-sm btn-accent" data-use="${c.id}">Use this contract</button>
-          ${on && drift ? `<button class="btn btn-sm btn-ghost" data-accept="${c.id}">Accept live logic after review</button>` : ""}
+      const on = live && live.id === c.id;
+      return `<div class="glass p-3 mb-2">
+        <div class="fw-semibold">${c.label} ${on ? "· in use" : ""}</div>
+        <div class="addr small">${c.proxy}</div>
+        <div class="small text-secondary">${c.note || ""}</div>
+        <div class="d-flex gap-2 mt-2">
+          <button type="button" class="btn btn-sm btn-ghost" data-use="${c.id}">Use</button>
+          <button type="button" class="btn btn-sm btn-accent" data-accept="${c.id}">Accept live pin</button>
         </div>
       </div>`;
     }).join("");
@@ -722,11 +1030,10 @@
     if ($("liveImpl")) $("liveImpl").textContent = state.liveImpl || "—";
     if ($("liveOwner")) $("liveOwner").textContent = state.liveOwner || "—";
   }
-
   function addUserContract() {
-    const proxy = ($("newProxy") && $("newProxy").value.trim()) || "";
-    const impl = ($("newImpl") && $("newImpl").value.trim()) || "";
-    const label = ($("newLabel") && $("newLabel").value.trim()) || "Migrated contract";
+    const label = ($("newLabel") && $("newLabel").value.trim()) || "Custom";
+    const proxy = $("newProxy") && $("newProxy").value.trim();
+    const impl = $("newImpl") && $("newImpl").value.trim();
     if (!isAddr(proxy)) return alert("Proxy must be a 0x address.");
     if (impl && !isAddr(impl)) return alert("Implementation must be a 0x address.");
     const list = extraContracts();
@@ -751,29 +1058,36 @@
               <i class="fa-solid fa-bars"></i>
             </button>
             <div class="collapse navbar-collapse" id="navMain">
-              <ul class="navbar-nav ms-auto align-items-lg-center gap-lg-1">
+              <ul class="navbar-nav ms-auto align-items-lg-center gap-1">
                 <li class="nav-item"><a class="nav-link ${page === "home" ? "active" : ""}" href="index.html">Home</a></li>
                 <li class="nav-item dropdown">
-                  <a class="nav-link dropdown-toggle ${["stake","unstake","claim"].includes(page) ? "active" : ""}" href="#" data-bs-toggle="dropdown">Actions</a>
+                  <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">Actions</a>
                   <ul class="dropdown-menu dropdown-menu-end">
-                    <li><a class="dropdown-item" href="stake.html"><i class="fa-solid fa-lock me-2"></i>Stake</a></li>
-                    <li><a class="dropdown-item" href="unstake.html"><i class="fa-solid fa-unlock me-2"></i>Unstake</a></li>
-                    <li><a class="dropdown-item" href="claim.html"><i class="fa-solid fa-coins me-2"></i>Claim</a></li>
+                    <li><a class="dropdown-item" href="stake.html">Stake</a></li>
+                    <li><a class="dropdown-item" href="unstake.html">Unstake</a></li>
+                    <li><a class="dropdown-item" href="claim.html">Claim</a></li>
                   </ul>
                 </li>
                 <li class="nav-item"><a class="nav-link ${page === "insights" ? "active" : ""}" href="insights.html">Insights</a></li>
                 <li class="nav-item dropdown">
-                  <a class="nav-link dropdown-toggle ${["log","contracts","guide","safety"].includes(page) ? "active" : ""}" href="#" data-bs-toggle="dropdown">More</a>
+                  <a class="nav-link dropdown-toggle" href="#" data-bs-toggle="dropdown">More</a>
                   <ul class="dropdown-menu dropdown-menu-end">
-                    <li><a class="dropdown-item" href="log.html"><i class="fa-solid fa-list me-2"></i>Activity log</a></li>
-                    <li><a class="dropdown-item" href="contracts.html"><i class="fa-solid fa-file-contract me-2"></i>Contracts</a></li>
-                    <li><a class="dropdown-item" href="guide.html"><i class="fa-solid fa-circle-info me-2"></i>Guide</a></li>
-                    <li><a class="dropdown-item" href="safety.html"><i class="fa-solid fa-shield-halved me-2"></i>Safety</a></li>
+                    <li><a class="dropdown-item" href="log.html">Activity log</a></li>
+                    <li><a class="dropdown-item" href="contracts.html">Contracts</a></li>
+                    <li><a class="dropdown-item" href="guide.html">Guide</a></li>
+                    <li><a class="dropdown-item" href="safety.html">Safety</a></li>
                   </ul>
                 </li>
                 <li class="nav-item ms-lg-2"><span id="status" class="pill wait">Checking…</span></li>
                 <li class="nav-item"><button type="button" class="btn btn-sm btn-ghost theme-toggle" id="btnTheme"><i class="fa-solid fa-sun"></i></button></li>
-                <li class="nav-item"><button type="button" class="btn btn-sm btn-accent" id="btnWallet"><i class="fa-solid fa-wallet me-1"></i>Connect</button></li>
+                <li class="nav-item">
+                  <div class="wallet-cluster">
+                    <span id="walletSignal" class="sig sig-off" title="Wallet"></span>
+                    <span id="rpcWarn" class="sig-warn d-none" title="RPC not allowed"><i class="fa-solid fa-triangle-exclamation"></i></span>
+                    <button type="button" class="btn btn-sm btn-accent" id="btnWallet"><i class="fa-solid fa-wallet me-1"></i>Connect</button>
+                    <button type="button" class="btn btn-sm btn-ghost d-none" id="btnDisconnect">Disconnect</button>
+                  </div>
+                </li>
               </ul>
             </div>
           </div>
@@ -790,57 +1104,53 @@
                 <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
               </div>
               <div class="modal-body" id="walletList"></div>
-              <p class="small text-secondary px-3 pb-3">Works with injected wallets and dapp browsers (MetaMask, Rabby, Trust, TokenPocket, SafePal, OKX, Bitget, Coinbase, Brave, Binance). Keys stay in the wallet.</p>
             </div>
           </div>
         </div>
-        <div class="err-dock">
-          <div class="glass p-2 px-3">
-            <div class="d-flex justify-content-between align-items-center">
-              <strong class="small"><i class="fa-solid fa-triangle-exclamation me-1"></i>Error log <span id="errCount" class="pill">0</span></strong>
-              <div class="d-flex gap-2">
-                <button type="button" class="btn btn-sm btn-ghost" id="btnCopyErr">Copy</button>
-                <button type="button" class="btn btn-sm btn-ghost" id="btnClearErr">Clear</button>
-              </div>
-            </div>
-            <pre id="errBody">No errors yet.</pre>
+        <div class="err-dock glass p-2">
+          <div class="d-flex justify-content-between small">
+            <span>Errors <span id="errCount">0</span></span>
+            <button type="button" class="btn btn-sm btn-ghost" id="btnCopyErr">Copy</button>
           </div>
+          <pre id="errBody">No errors yet.</pre>
         </div>`;
       document.body.appendChild(m);
     }
     const foot = $("foot");
     if (foot) foot.innerHTML = `Chain-1404 Stake Manager · community UI · keys stay in your wallet · stuck send? <a href="${P.kedge}">KEDGE</a>`;
-    const poolEl = $("pool");
-    if (poolEl && savedPool() && !poolEl.value) poolEl.value = savedPool();
-    $("btnWallet")?.addEventListener("click", showWalletModal);
+    $("btnWallet")?.addEventListener("click", () => {
+      if (state.account) return;
+      showWalletModal();
+    });
+    $("btnDisconnect")?.addEventListener("click", disconnectWallet);
     $("btnTheme")?.addEventListener("click", () => applyTheme(theme() === "dark" ? "light" : "dark"));
     $("btnStake")?.addEventListener("click", doStake);
     $("btnUnstake")?.addEventListener("click", doUnstake);
     $("btnClaim")?.addEventListener("click", doClaim);
-    $("btnMax")?.addEventListener("click", async () => {
-      if (!state.account) return;
-      const leave = 2n * 10n ** 16n;
+    $("btnSearchContracts")?.addEventListener("click", () => searchContracts().catch((e) => pushErr(e.message)));
+    $("btnMax")?.addEventListener("click", () => {
+      const leave = 10n ** 16n;
       const use = state.pos.wallet > leave ? state.pos.wallet - leave : 0n;
       if ($("amount")) $("amount").value = (Number(use) / 1e18).toFixed(4);
     });
     $("btnClear")?.addEventListener("click", () => {
       if (confirm("Remove the activity log on this device?")) { localStorage.removeItem(K.log); renderLog(); }
     });
-    $("pool")?.addEventListener("change", () => { setPool($("pool").value.trim()); refresh(); });
     $("btnAddContract")?.addEventListener("click", addUserContract);
     $("btnCopyErr")?.addEventListener("click", async () => {
-      try {
-        await navigator.clipboard.writeText($("errBody").textContent || "");
-        $("btnCopyErr").textContent = "Copied";
-        setTimeout(() => { $("btnCopyErr").textContent = "Copy"; }, 1200);
-      } catch { alert("Copy failed"); }
+      try { await navigator.clipboard.writeText($("errBody").textContent || ""); } catch {}
     });
-    $("btnClearErr")?.addEventListener("click", () => { localStorage.removeItem(K.err); renderErr(); });
-    applyTheme(localStorage.getItem(K.theme) || "dark");
-    renderErr();
   }
 
-  window.C1404 = { refresh, state, P };
-  paintShell();
-  refresh();
+  async function boot() {
+    paintShell();
+    renderErr();
+    startWaitClock();
+    try { await silentReconnect(); } catch {}
+    await refresh();
+    if (lockedContract() || savedPool()) {
+      try { await searchContracts(); } catch {}
+    }
+  }
+  boot();
 })();
